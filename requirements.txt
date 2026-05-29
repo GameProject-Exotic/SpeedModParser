@@ -1,4 +1,1 @@
-graphviz==0.21
-matplotlib==3.10.9
-networkx==3.6.1
-sourcepp==2026.4.2
+
