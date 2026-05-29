@@ -8,7 +8,7 @@
 
 import argparse
 import struct
-import sys
+import lzma
 from collections import defaultdict
 
 EPSILON = 1e-4
@@ -52,12 +52,30 @@ class BSPFile:
             self.lumps[i] = (off, length)
         self.file.read(4)  # skip maprevision
 
+    def _decompress_lump(self, raw_data: bytes) -> bytes:
+        """Если данные начинаются с LZMA-заголовка Valve, распаковываем."""
+        if len(raw_data) < 4 or raw_data[:4] != b'LZMA':
+            return raw_data   # не сжато
+
+        # Valve LZMA header: id(4) + actualSize(4) + lzmaSize(4) + properties(5)
+        if len(raw_data) < 17:
+            raise ValueError("Corrupted LZMA lump")
+        id_, actualSize, lzmaSize = struct.unpack_from('<III', raw_data, 0)
+        properties = raw_data[12:17]
+        compressed = raw_data[17:17 + lzmaSize]
+
+        # Стандартный LZMA-заголовок: свойства(5) + размер несжатых данных (8, little-endian)
+        std_header = properties + struct.pack('<Q', actualSize)
+        return lzma.decompress(std_header + compressed)
+
     def read_lump(self, lump_index):
         off, length = self.lumps.get(lump_index, (0, 0))
         if length == 0:
             return b''
         self.file.seek(off)
-        return self.file.read(length)
+        raw = self.file.read(length)
+        # Пытаемся декомпрессировать, если это LZMA
+        return self._decompress_lump(raw)
 
     def close(self):
         self.file.close()
