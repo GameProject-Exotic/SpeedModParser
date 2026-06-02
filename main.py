@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
 Парсер trigger_multiple, связанных с player_speedmod.
-Выводит:
-- targetname триггера
-- все outputs (связи)
-- классификацию (nobhop/noflash/…)
-- центры всех брашей (через пробел, удобно для setpos)
+Вывод по умолчанию: targetname, тип, центры брашей (для setpos).
+Параметры:
+  --outputs   показать все outputs триггера
+  --origins   показать origin триггера (если есть)
+  --coords    показать min/max каждого браша (вместо центров)
+  --no-centers   не показывать центры брашей
+  --verbose   включить все расширенные выводы (outputs, origins, coords)
 """
 
 import sys
 import os
 import subprocess
 import tempfile
+import argparse
 import srctools
 
 BSPSRC_JAR = "bspsrc.jar"
 
 # ---------- Функции нормализации и классификации (из вашего старого скрипта) ----------
 def normalize_modify_output(key, val):
-    """Нормализует выход ModifySpeed в каноническую строку."""
     parts = val.split(',')
     if len(parts) < 3:
         return None
@@ -44,7 +46,6 @@ def normalize_modify_output(key, val):
     return f"{key} = {target},{parts[1].strip()},{param},{delay_str},{fire_once}"
 
 def classify_trigger(normalized_outputs, flag_mask):
-    """Определяет тип триггера (nobhop, noflash и т.д.) по нормализованным выходам и маске флагов speedmod."""
     entries = []
     for out in normalized_outputs:
         left, right = out.split('=', 1)
@@ -94,6 +95,24 @@ def classify_trigger(normalized_outputs, flag_mask):
                 labels.append(label)
     return labels if labels else ['other']
 
+# ---------- Вспомогательная функция для вывода брашей ----------
+def print_brushes(trig, args):
+    """Выводит геометрию брашей в зависимости от параметров."""
+    for j, brush in enumerate(trig.solids, 1):
+        try:
+            bmin, bmax = brush.get_bbox()
+            if args.coords:
+                # вывод min/max
+                sys.stdout.write(f"  Brush {j}: min ({bmin.x:.2f}, {bmin.y:.2f}, {bmin.z:.2f})  max ({bmax.x:.2f}, {bmax.y:.2f}, {bmax.z:.2f})\n")
+            else:
+                # вывод центра (по умолчанию)
+                cx = (bmin.x + bmax.x) / 2.0
+                cy = (bmin.y + bmax.y) / 2.0
+                cz = (bmin.z + bmax.z) / 2.0
+                sys.stdout.write(f"{cx:.2f} {cy:.2f} {cz:.2f}\n")
+        except Exception as e:
+            sys.stdout.write(f"  Brush {j}: error - {e}\n")
+
 # ---------- Основная логика ----------
 def run_bspsrc(bsp_path, out_dir):
     vmf_name = os.path.basename(bsp_path).replace('.bsp', '.vmf')
@@ -107,24 +126,34 @@ def run_bspsrc(bsp_path, out_dir):
     return vmf_path
 
 def main():
-    if len(sys.argv) < 2:
-        print("Использование: python script.py map.bsp")
-        sys.exit(1)
-    bsp_file = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Анализатор trigger_multiple, связанных с player_speedmod")
+    parser.add_argument('bspfile', help='Путь к BSP-файлу')
+    parser.add_argument('--outputs', action='store_true', help='Показать все outputs триггера')
+    parser.add_argument('--origins', action='store_true', help='Показать origin триггера (если есть)')
+    parser.add_argument('--coords', action='store_true', help='Показать min/max брашей вместо центров')
+    parser.add_argument('--no-centers', action='store_true', help='Не показывать центры брашей (только outputs/origins/classification)')
+    parser.add_argument('--verbose', action='store_true', help='Включить все расширенные выводы (outputs, origins, coords)')
+    args = parser.parse_args()
 
-    if not os.path.exists(bsp_file):
-        print(f"Файл {bsp_file} не найден")
+    # Если указан --verbose, включаем все флаги
+    if args.verbose:
+        args.outputs = True
+        args.origins = True
+        args.coords = True
+
+    if not os.path.exists(args.bspfile):
+        print(f"Файл {args.bspfile} не найден")
         sys.exit(1)
     if not os.path.exists(BSPSRC_JAR):
         print(f"bspsrc.jar не найден по пути {BSPSRC_JAR}")
         sys.exit(1)
 
     with tempfile.TemporaryDirectory(prefix="bspsrc_") as tmpdir:
-        vmf_path = run_bspsrc(bsp_file, tmpdir)
+        vmf_path = run_bspsrc(args.bspfile, tmpdir)
         vmf = srctools.VMF.parse(vmf_path)
 
-        # ---- 1. Все player_speedmod и их spawnflags ----
-        speedmod_info = {}  # targetname -> spawnflags
+        # Все player_speedmod и их spawnflags
+        speedmod_info = {}
         for ent in vmf.entities:
             if ent['classname'] == 'player_speedmod':
                 tn = ent.get('targetname')
@@ -135,12 +164,11 @@ def main():
             print("player_speedmod не найдены.")
             return
 
-        # ---- 2. Найти trigger_multiple, связанные со speedmod через ModifySpeed ----
+        # Ищем trigger_multiple, связанные со speedmod через ModifySpeed
         triggers = []
         for ent in vmf.entities:
             if ent['classname'] != 'trigger_multiple':
                 continue
-            # Проверим outputs на наличие ModifySpeed, ссылающегося на speedmod
             for out in ent.outputs:
                 if out.input == 'ModifySpeed' and out.target in speedmod_info:
                     triggers.append(ent)
@@ -151,48 +179,46 @@ def main():
             return
 
         print(f"Найдено {len(triggers)} trigger_multiple, связанных с player_speedmod:\n")
-
         for idx, trig in enumerate(triggers, 1):
             tname = trig.get('targetname', '<без имени>')
-            print(f"{idx}. trigger_multiple '{tname}'")
+            # Вывод заголовка
+            sys.stdout.write(f"{idx}. {tname}")
 
-            # ---- Вывод всех outputs ----
-            print("   Outputs:")
-            for out in trig.outputs:
-                print(f"      {out.output} -> {out.target},{out.input},{out.params},{out.delay},{out.times}")
-
-            # ---- Классификация ----
-            # Собираем нормализованные выходы ModifySpeed
+            # Классификация
             norm_outputs = []
             involved_speedmods = set()
             for out in trig.outputs:
                 if out.input == 'ModifySpeed' and out.target in speedmod_info:
-                    # Формируем строку как в старом скрипте
                     fake_key = out.output
                     fake_val = f"{out.target},{out.input},{out.params},{out.delay},{out.times}"
                     norm = normalize_modify_output(fake_key, fake_val)
                     if norm:
                         norm_outputs.append(norm)
                     involved_speedmods.add(out.target)
-            # Маска флагов от всех задействованных speedmod
             flag_mask = 0
             for tn in involved_speedmods:
                 flag_mask |= speedmod_info.get(tn, 0)
             labels = classify_trigger(norm_outputs, flag_mask)
-            print(f"   Classification: {', '.join(labels)}")
+            sys.stdout.write(f" [{', '.join(labels)}]")
 
-            # ---- Геометрия (центры брашей) ----
-            print("   Brush centers (for setpos):")
-            for j, brush in enumerate(trig.solids, 1):
-                try:
-                    bmin, bmax = brush.get_bbox()
-                    cx = (bmin.x + bmax.x) / 2.0
-                    cy = (bmin.y + bmax.y) / 2.0
-                    cz = (bmin.z + bmax.z) / 2.0
-                    print(f"      {cx:.2f} {cy:.2f} {cz:.2f}")
-                except Exception as e:
-                    print(f"      Ошибка браша {j}: {e}")
-            print()
+            # Origin (если запрошено)
+            if args.origins:
+                origin = trig.get('origin', '')
+                if origin:
+                    sys.stdout.write(f" origin={origin}")
+            sys.stdout.write("\n")
+
+            # Outputs (если запрошено)
+            if args.outputs:
+                for out in trig.outputs:
+                    sys.stdout.write(f"  {out.output} -> {out.target},{out.input},{out.params},{out.delay},{out.times}\n")
+
+            # Геометрия брашей
+            if not args.no_centers:
+                print_brushes(trig, args)
+
+            # Пустая строка между триггерами для читаемости
+            sys.stdout.write("\n")
 
 if __name__ == "__main__":
     main()
