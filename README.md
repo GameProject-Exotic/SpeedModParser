@@ -1,9 +1,11 @@
 # How to use:
 
+## 0. Download last python version and "add for PATH"
 ## 1. Copy this repo
 ## 2. Download [bspsrc jar file](https://github.com/ata4/bspsrc/releases/download/v1.4.8/bspsrc-jar-only.zip)
 ## 3. Copy jar file to repo directory or change BSPSRC_JAR file directory in main.py
-## 4. Run via `python main.py [map name.bsp]`
+## 4. Install srctools via `pip install srctools`
+## 5. Run via `python main.py [map name.bsp]`
 
 # Примеры использования
 ## 1. Минимальный вывод (только имена, тип, центры брашей):
